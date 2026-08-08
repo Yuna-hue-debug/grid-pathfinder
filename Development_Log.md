@@ -74,3 +74,22 @@ The agent can now:
 ### Next Step
 
 Implement path reconstruction so that the agent can determine not only the distance to the target, but also the actual route it should take.
+## 2026-08-08 — Path Reconstruction
+
+### What I learned
+
+- A parent dictionary can record how each node was reached.
+- By following parent pointers backwards, the shortest path can be reconstructed.
+- The reconstructed path needs to be reversed to obtain the route from start to goal.
+- The path can be converted into actions such as UP, DOWN, LEFT, and RIGHT.
+
+### Implementation
+
+Added:
+- Parent tracking
+- Path reconstruction
+- Action generation from consecutive positions
+
+### Next Step
+
+Extend the agent to handle multiple targets and make decisions based on both reward and distance.
