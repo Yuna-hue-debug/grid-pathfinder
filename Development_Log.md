@@ -29,3 +29,20 @@ Implement the first move validation function.
 ### Reflection
 
 Today I learned that before an AI can find a path, it must first determine whether a move is legal. This validation function will become the foundation of the pathfinding algorithm.
+## 2026-08-07
+
+### Topic
+
+Breadth-First Search (BFS)
+
+### What I learned
+
+- A grid can be modeled as a graph.
+- BFS explores nodes level by level.
+- Queue is required for shortest path search.
+
+### Progress
+
+- [x] Grid representation
+- [x] Move validation
+- [x] BFS implementation
