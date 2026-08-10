@@ -14,7 +14,7 @@ The project is inspired by the GoldRush programming competition and is developed
 - [x] Grid representation
 - [ ] Move validation
 - [ ] Breadth-First Search (BFS)
-- [ ] Shortest path recovery
+- [x] Shortest path recovery
 - [ ] Multi-target decision making
 - [ ] Opponent prediction
 - [ ] Performance optimization
@@ -33,4 +33,4 @@ The project is inspired by the GoldRush programming competition and is developed
 
 ## Development Log
 
-See `Development_Log.md`
+See `Development_Log.md` for daily notes, including the latest entry on using BFS results for multi-target decision making.
