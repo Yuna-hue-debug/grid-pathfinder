@@ -93,3 +93,43 @@ Added:
 ### Next Step
 
 Extend the agent to handle multiple targets and make decisions based on both reward and distance.
+
+---
+
+## 2026-08-10 — Multi-Target Decision Making
+
+### Topic
+
+Using BFS results to choose which target the agent should pursue next.
+
+### What I learned
+
+- BFS is not only useful for finding one shortest path; it can also measure the distance from the agent to multiple reachable targets.
+- When several targets exist on the grid, the agent needs a decision rule instead of simply moving toward the first target it finds.
+- A simple scoring idea is to compare each target's reward with its distance, so closer or more valuable targets can be prioritized.
+- Unreachable targets should be ignored because no valid path exists through walls or blocked cells.
+- Separating pathfinding from decision making makes the agent easier to improve: BFS answers "how far and by which route," while the decision layer answers "which goal is best."
+
+### Implementation Notes
+
+The next version of the agent should:
+
+1. Scan the grid for all possible targets.
+2. Run BFS or reuse BFS distance data to evaluate each target.
+3. Filter out unreachable targets.
+4. Choose the best target using a clear score, such as `reward / distance`.
+5. Reconstruct the path and convert it into movement actions.
+
+### Progress
+
+- [x] Grid representation
+- [x] Move validation
+- [x] BFS implementation
+- [x] Shortest path recovery
+- [ ] Multi-target decision making
+- [ ] Opponent prediction
+- [ ] Performance optimization
+
+### Reflection
+
+Today I learned that a pathfinding agent should not only ask whether it can reach a goal, but also whether that goal is the best choice. This changes the project from simple shortest-path search into the beginning of strategic decision making.
