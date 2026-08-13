@@ -2,7 +2,6 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <iostream>
 #include <queue>
 #include <unordered_set>
 #include <vector>
@@ -74,9 +73,11 @@ struct SearchResult {
     std::vector<int> actions;
     int value = 0;
     Pos target{-1, -1};
+    int rivalDist = 99;
+    double expectedGold = 0.0;
+    double objective = 0.0;
 };
 
-// Encode a position as an integer for tiny fixed-size BFS arrays.
 inline int id(int r, int c) {
     return r * W + c;
 }
@@ -85,7 +86,35 @@ inline Pos fromId(int x) {
     return Pos{x / W, x % W};
 }
 
-// Reconstruct actions from parent arrays.
+inline int manhattan(const Pos& a, const Pos& b) {
+    return std::abs(a.r - b.r) + std::abs(a.c - b.c);
+}
+
+inline int nearestCompetitorDistance(
+    const Pos& target,
+    const std::array<Pos, 9>& competitors,
+    int begin,
+    int end) {
+
+    int best = 99;
+    for (int i = begin; i < end; ++i) {
+        best = std::min(best, manhattan(target, competitors[i]));
+    }
+    return best;
+}
+
+inline int nearestCompetitorDistance(
+    const Pos& target,
+    const std::array<Pos, 9>& competitors,
+    int competitorCount) {
+    return nearestCompetitorDistance(target, competitors, 0, competitorCount);
+}
+
+inline double targetUtility(int value) {
+    const double v = static_cast<double>(value);
+    return v * (1.0 + 0.015 * std::min(v, 30.0));
+}
+
 std::vector<int> reconstruct(const std::array<int, H * W>& parent,
                              const std::array<int, H * W>& parentAction,
                              int startId, int targetId) {
@@ -106,7 +135,11 @@ SearchResult goldPath(
     const Grid& grid,
     Pos start,
     const std::unordered_set<Pos, PosHash>& blocked,
-    int maxSteps = 6) {
+    const std::array<Pos, 9>& competitors,
+    int competitorCount,
+    int enemyCount,
+    int maxSteps = 6,
+    const std::unordered_set<Pos, PosHash>* ignoredTargets = nullptr) {
 
     std::array<int, H * W> parent;
     std::array<int, H * W> parentAction;
@@ -125,6 +158,7 @@ SearchResult goldPath(
     int bestValue = 0;
     int bestDist = 1;
     int bestId = -1;
+    int bestRivalDist = 99;
     double bestScore = -1.0;
 
     while (!q.empty()) {
@@ -134,17 +168,55 @@ SearchResult goldPath(
         const Pos cur = fromId(curId);
         const int d = distance[curId];
 
-        if (d > 0 && grid[cur.r][cur.c] >= 1) {
+        if (d > 0 && grid[cur.r][cur.c] >= 1 &&
+            (ignoredTargets == nullptr ||
+             ignoredTargets->find(cur) == ignoredTargets->end())) {
             const int value = grid[cur.r][cur.c];
-            const double score = static_cast<double>(value) / (d+1);
+            const int enemyDist =
+                nearestCompetitorDistance(
+                    cur, competitors, 0, enemyCount);
+            const int npcDist =
+                nearestCompetitorDistance(
+                    cur, competitors, enemyCount, competitorCount);
 
-            if (!found || score > bestScore ||
-                (std::abs(score - bestScore) < 1e-12 && value > bestValue)) {
+            double competitionFactor = 1.0;
+
+            if (enemyDist < d) {
+                competitionFactor *= 0.15;
+            } else if (enemyDist == d) {
+                competitionFactor *= 0.28;
+            } else if (enemyDist == d + 1) {
+                competitionFactor *= 0.58;
+            } else if (enemyDist == d + 2) {
+                competitionFactor *= 0.82;
+            }
+
+            if (npcDist + 1 < d) {
+                competitionFactor *= 0.38;
+            } else if (npcDist < d) {
+                competitionFactor *= 0.50;
+            } else if (npcDist == d) {
+                competitionFactor *= 0.66;
+            } else if (npcDist == d + 1) {
+                competitionFactor *= 0.84;
+            }
+
+            const int rivalDist = std::min(enemyDist, npcDist);
+            const double utility = targetUtility(value);
+            const double score =
+                (utility / static_cast<double>(d + 1)) * competitionFactor
+                + 0.02 * utility;
+
+            if (!found || score > bestScore + 1e-12 ||
+                (std::abs(score - bestScore) < 1e-12 &&
+                 (value > bestValue ||
+                  (value == bestValue && d < bestDist)))) {
                 found = true;
                 bestScore = score;
                 bestValue = value;
                 bestDist = d;
                 bestId = curId;
+                bestRivalDist = rivalDist;
             }
         }
 
@@ -172,7 +244,16 @@ SearchResult goldPath(
     result.actions = reconstruct(parent, parentAction, startId, bestId);
     result.value = bestValue;
     result.target = fromId(bestId);
-    (void)bestDist;
+    result.rivalDist = bestRivalDist;
+    result.objective = bestScore;
+
+    double captureFactor = 1.0;
+    if (bestRivalDist < bestDist) captureFactor = 0.35;
+    else if (bestRivalDist == bestDist) captureFactor = 0.55;
+    else if (bestRivalDist == bestDist + 1) captureFactor = 0.80;
+    result.expectedGold =
+        0.65 * static_cast<double>(bestValue) * captureFactor;
+
     return result;
 }
 
@@ -217,7 +298,18 @@ std::vector<int> frontierPath(
             }
 
             if (fogNeighbors > 0) {
-                const double score = 3.0 * fogNeighbors - 0.25 * d;
+                const int centerDist =
+                    std::abs(cur.r - 8) + std::abs(cur.c - 8);
+                const bool inCentral9 =
+                    (cur.r >= 4 && cur.r <= 12 &&
+                     cur.c >= 4 && cur.c <= 12);
+
+                const double score =
+                    3.0 * fogNeighbors
+                    - 0.22 * d
+                    - 0.10 * centerDist
+                    + (inCentral9 ? 1.2 : 0.0);
+
                 if (!found || score > bestScore) {
                     found = true;
                     bestScore = score;
@@ -262,20 +354,109 @@ std::vector<Pos> pathPositions(Pos start, const std::vector<int>& actions) {
     return result;
 }
 
-} // namespace
+struct RoutePlan {
+    std::vector<int> actions;
+    int collectedValue = 0;
+    double expectedGold = 0.0;
+    double objective = 0.0;
+};
 
-// ============================================================
-// Main strategy function
-// ============================================================
-// IMPORTANT:
-// The exact declaration below should match the organizer's C++ template.
-// Based on the published interface shown in the competition rules, it is:
-//
-// extern "C" GameOutput moveDecision(const GameInput* input)
-//
-// If the provided starter code already contains this declaration, replace
-// only the function body with the implementation below.
-// ============================================================
+template <typename Grid>
+RoutePlan buildRoute(
+    const Grid& grid,
+    Pos start,
+    int budget,
+    const std::unordered_set<Pos, PosHash>& baseBlocked,
+    const std::array<Pos, 9>& competitors,
+    int competitorCount,
+    int enemyCount) {
+
+    RoutePlan plan;
+    if (budget <= 0) return plan;
+
+    std::unordered_set<Pos, PosHash> blocked = baseBlocked;
+    std::unordered_set<Pos, PosHash> claimedTargets;
+    Pos cur = start;
+    int remaining = budget;
+
+    for (int chain = 0; chain < 4 && remaining > 0; ++chain) {
+        SearchResult next =
+            goldPath(
+                grid, cur, blocked, competitors,
+                competitorCount, enemyCount, remaining, &claimedTargets);
+
+        if (next.actions.empty() || next.value <= 0) break;
+
+        plan.actions.insert(
+            plan.actions.end(), next.actions.begin(), next.actions.end());
+        plan.collectedValue += next.value;
+        plan.expectedGold += next.expectedGold;
+        plan.objective += next.objective;
+        remaining -= static_cast<int>(next.actions.size());
+        cur = next.target;
+
+        claimedTargets.insert(next.target);
+    }
+
+    if (remaining > 0) {
+        std::vector<int> explore =
+            frontierPath(grid, cur, blocked, remaining);
+        if (static_cast<int>(explore.size()) > remaining) {
+            explore.resize(remaining);
+        }
+        plan.actions.insert(
+            plan.actions.end(), explore.begin(), explore.end());
+    }
+
+    if (static_cast<int>(plan.actions.size()) > budget) {
+        plan.actions.resize(budget);
+    }
+
+    return plan;
+}
+
+inline int visibleGoldSum(const GameInput& game) {
+    int total = 0;
+    for (int r = 0; r < H; ++r) {
+        for (int c = 0; c < W; ++c) {
+            if (game.grid[r][c] > 0) total += game.grid[r][c];
+        }
+    }
+    return total;
+}
+
+inline int snapshotGoldRemaining(const GameInput& game) {
+    if (!game.snapshot_valid) return 0;
+    int total = 0;
+    for (int i = 0; i < REGION_COUNT; ++i) {
+        total += std::max(0, game.snapshot.regions[i].gold_remaining);
+    }
+    return total;
+}
+
+inline int chooseVision(const GameInput& game) {
+    if (!game.snapshot_valid) return 0;
+
+    const int carried =
+        game.my_units_gold[0] + game.my_units_gold[1];
+    const int visible = visibleGoldSum(game);
+    const int remaining = snapshotGoldRemaining(game);
+    const int deficit = game.gold_opp - carried;
+
+    if (carried < 20) return 0;
+
+    if (visible == 0 && remaining >= 120) {
+        return 1;
+    }
+
+    if (visible <= 2 && remaining >= 90 && deficit >= 80) {
+        return 1;
+    }
+
+    return 0;
+}
+
+} // namespace
 
 extern "C" GameOutput moveDecision(const GameInput* input) {
     GameOutput output{};
@@ -288,138 +469,147 @@ extern "C" GameOutput moveDecision(const GameInput* input) {
     };
 
     std::unordered_set<Pos, PosHash> enemyCells;
+    std::array<Pos, 9> competitors{};
+    int competitorCount = 0;
+
     for (int i = 0; i < 2; ++i) {
         const int r = game.visible_enemies[i].row;
         const int c = game.visible_enemies[i].col;
         if (r >= 0 && c >= 0) {
-            enemyCells.insert(Pos{r, c});
+            const Pos p{r, c};
+            enemyCells.insert(p);
+            competitors[competitorCount++] = p;
         }
     }
 
-    std::vector<int> tempPaths[2];
-    int tempValues[2] = {0, 0};
+    const int enemyCount = competitorCount;
 
-    for (int i = 0; i < 2; ++i) {
-        SearchResult result = goldPath(game.grid, starts[i], enemyCells, 6);
-        tempPaths[i] = std::move(result.actions);
-        tempValues[i] = result.value;
-
-        if (tempPaths[i].empty()) {
-            tempPaths[i] = frontierPath(game.grid, starts[i], enemyCells, 6);
-            tempValues[i] = 0;
+    for (int i = 0;
+         i < game.num_visible_npcs &&
+         i < MAX_NPCS &&
+         competitorCount < static_cast<int>(competitors.size());
+         ++i) {
+        const int r = game.visible_npcs[i].pos.row;
+        const int c = game.visible_npcs[i].pos.col;
+        if (game.visible_npcs[i].id != 0 && r >= 0 && c >= 0) {
+            competitors[competitorCount++] = Pos{r, c};
         }
     }
 
-    auto opportunityScore = [&](int idx) -> double {
-        if (tempValues[idx] <= 0 || tempPaths[idx].empty()) return 0.0;
-        return static_cast<double>(tempValues[idx]) /
-               static_cast<double>(tempPaths[idx].size());
+    struct Candidate {
+        RoutePlan plans[2];
+        int k = 3;
+        int order = 0;
+        double score = -1e100;
     };
 
-    const int first = (opportunityScore(0) >= opportunityScore(1)) ? 0 : 1;
-    const int second = 1 - first;
+    Candidate best;
 
-    std::vector<int> paths[2];
-    int values[2] = {0, 0};
+    for (int k = 0; k <= STEPS; ++k) {
+        const int budget[2] = {k, STEPS - k};
 
-    paths[first] = tempPaths[first];
-    values[first] = tempValues[first];
+        for (int order = 0; order < 2; ++order) {
+            const int firstUnit = order;
+            const int secondUnit = 1 - order;
 
-    std::unordered_set<Pos, PosHash> blocked = enemyCells;
-    for (const Pos& p : pathPositions(starts[first], paths[first])) {
-        blocked.insert(p);
+            Candidate cand;
+            cand.k = k;
+            cand.order = order;
+
+            std::unordered_set<Pos, PosHash> firstBlocked = enemyCells;
+            firstBlocked.insert(starts[secondUnit]);
+
+            cand.plans[firstUnit] =
+                buildRoute(
+                    game.grid,
+                    starts[firstUnit],
+                    budget[firstUnit],
+                    firstBlocked,
+                    competitors,
+                    competitorCount,
+                    enemyCount);
+
+            std::unordered_set<Pos, PosHash> secondBlocked = enemyCells;
+
+            const std::vector<Pos> firstPath =
+                pathPositions(
+                    starts[firstUnit],
+                    cand.plans[firstUnit].actions);
+
+            if (!firstPath.empty()) {
+                secondBlocked.insert(firstPath.back());
+            } else {
+                secondBlocked.insert(starts[firstUnit]);
+            }
+
+            cand.plans[secondUnit] =
+                buildRoute(
+                    game.grid,
+                    starts[secondUnit],
+                    budget[secondUnit],
+                    secondBlocked,
+                    competitors,
+                    competitorCount,
+                    enemyCount);
+
+            const double expected =
+                cand.plans[0].expectedGold +
+                cand.plans[1].expectedGold;
+
+            const double targetQuality =
+                cand.plans[0].objective +
+                cand.plans[1].objective;
+
+            const int used =
+                static_cast<int>(cand.plans[0].actions.size()) +
+                static_cast<int>(cand.plans[1].actions.size());
+
+            cand.score =
+                expected
+                + 0.08 * targetQuality
+                + 0.015 * static_cast<double>(used);
+
+            const int candImbalance =
+                std::abs(k - (STEPS - k));
+            const int bestImbalance =
+                std::abs(best.k - (STEPS - best.k));
+
+            if (cand.score > best.score + 1e-12 ||
+                (std::abs(cand.score - best.score) <= 1e-12 &&
+                 candImbalance < bestImbalance)) {
+                best = std::move(cand);
+            }
+        }
     }
 
-    SearchResult secondResult = goldPath(game.grid, starts[second], blocked, 6);
-    paths[second] = std::move(secondResult.actions);
-    values[second] = secondResult.value;
-
-    if (paths[second].empty()) {
-        paths[second] = frontierPath(game.grid, starts[second], blocked, 6);
-        values[second] = 0;
-    }
-
-    // --------------------------------------------------------
-    // V2.1: dynamic k allocation
-    //
-    // k = number of actions allocated to unit 0.
-    // Unit 1 receives 6-k actions.
-    //
-    // Instead of using fixed heuristic weights (0.65/0.03/etc.),
-    // estimate the value captured by each unit according to how
-    // much of its planned path can actually be executed.
-    // --------------------------------------------------------
-    auto allocationValue = [&](int idx, int allocatedSteps) -> double {
-        if (allocatedSteps <= 0 || paths[idx].empty()) {
-            return 0.0;
-        }
-
-        const int pathLength = static_cast<int>(paths[idx].size());
-        const int executed = std::min(pathLength, allocatedSteps);
-
-        if (values[idx] > 0) {
-            // If the whole path fits, assume the target gold is collected.
-            // Otherwise, estimate partial value linearly by path progress.
-            return static_cast<double>(values[idx]) *
-                   static_cast<double>(executed) /
-                   static_cast<double>(pathLength);
-        }
-
-        // No visible gold target: give a small exploration value to
-        // actually executable frontier movement.
-        return 0.20 * static_cast<double>(executed);
+    const int bestK = best.k;
+    RoutePlan finalPlans[2] = {
+        std::move(best.plans[0]),
+        std::move(best.plans[1])
     };
+    const int execFirst = best.order;
 
-    int bestK = 3;
-    double bestScore = -1e100;
-
-    for (int k = 0; k <= 6; ++k) {
-        const int n0 = k;
-        const int n1 = 6 - k;
-
-        const double score =
-            allocationValue(0, n0) +
-            allocationValue(1, n1);
-
-        std::cout << "k=" << k
-          << " | value0=" << values[0]
-          << " path0=" << paths[0].size()
-          << " | value1=" << values[1]
-          << " path1=" << paths[1].size()
-          << " | score=" << score
-          << std::endl;
-        // Deterministic tie-break: prefer the more balanced allocation.
-        const int imbalance = std::abs(n0 - n1);
-        const int bestImbalance = std::abs(bestK - (6 - bestK));
-
-        if (score > bestScore + 1e-12 ||
-            (std::abs(score - bestScore) <= 1e-12 &&
-             imbalance < bestImbalance)) {
-            bestScore = score;
-            bestK = k;
-        }
-    }
-    std::cout << "BEST K="
-          << bestK
-          << " | BEST SCORE="
-          << bestScore
-          << std::endl;
-    for (int i = 0; i < STEPS; ++i) output.actions[i] = 4; // STAY
-
-    for (int i = 0; i < bestK && i < static_cast<int>(paths[0].size()); ++i) {
-        output.actions[i] = paths[0][i];
+    for (int i = 0; i < STEPS; ++i) {
+        output.actions[i] = 4;
     }
 
-    for (int j = 0; j < (6 - bestK) &&
-                     j < static_cast<int>(paths[1].size()); ++j) {
-        output.actions[bestK + j] = paths[1][j];
+    for (int i = 0;
+         i < bestK &&
+         i < static_cast<int>(finalPlans[0].actions.size());
+         ++i) {
+        output.actions[i] = finalPlans[0].actions[i];
+    }
+
+    for (int j = 0;
+         j < STEPS - bestK &&
+         j < static_cast<int>(finalPlans[1].actions.size());
+         ++j) {
+        output.actions[bestK + j] = finalPlans[1].actions[j];
     }
 
     output.k = bestK;
-    output.order = (values[0] >= values[1]) ? 0 : 1;
-
-    const int totalGold = game.my_units_gold[0] + game.my_units_gold[1];
-    output.vp = (game.snapshot_valid && totalGold >= 2) ? 1 : 0;
+    output.order = execFirst;
+    output.vp = chooseVision(game);
 
     return output;
 }
