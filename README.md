@@ -4,16 +4,25 @@ A C++ decision engine for competitive grid-based resource collection under parti
 
 ## Overview
 
-The agent controls two units that share six actions each turn. It must decide how to allocate those actions, which unit should move first, which visible resource targets are worth pursuing, and when to explore instead of chasing a contested target.
+The agent controls two units sharing six actions per turn. It must jointly decide action allocation, execution order, resource targets, exploration behavior, and whether information from additional vision is worth its cost.
 
-The environment is challenging because of:
+The environment combines fog-of-war, stochastic gold generation, obstacles and bombs, competing players/NPCs, execution-order effects, and strict decision-latency requirements.
 
-- partial observability and fog-of-war;
-- stochastic gold generation;
-- obstacles and bombs;
-- competing players and NPCs;
-- execution-order effects when multiple agents race for the same resource;
-- a strict latency requirement for every decision.
+## Current Version — V9
+
+V9 is a log-driven refinement of the V8 baseline. Instead of a large strategy rewrite, winning and losing V8 logs were compared and three targeted changes were introduced:
+
+- **exploration separation** — light unit-specific frontier preferences reduce duplicated exploration;
+- **execution-order urgency** — contested first targets can make execution order strategically meaningful rather than a near-constant tie-break;
+- **more conservative vision purchasing** — information is purchased only under weaker visible opportunity and substantial remaining fog.
+
+V9 intentionally preserves the core V8 expected-value planner so the effect of these changes remains interpretable.
+
+### Validation
+
+V8 was kept as the champion and V9 was tested directly as a challenger. In the current simulation validation, **V9 defeated V8 on all three public-test maps**.
+
+This result supports promotion of V9 as the current candidate, while V8 remains the benchmark for larger-sample and unseen-map testing.
 
 ## System Architecture
 
@@ -30,70 +39,66 @@ Multi-Target Route Planning
     ↓
 Joint k / Execution-Order Optimization
     ↓
+Exploration / Selective Vision
+    ↓
 Six Final Actions
 ```
 
-The current planner separates pathfinding from strategic decision making. BFS answers **how to reach a target**, while the scoring layer decides **which target is worth pursuing**.
+BFS answers **how to reach a target**; the scoring layer decides **which target is worth pursuing**; the joint planner decides **how the shared action budget should be used**.
 
 ## Strategy Evolution
 
 ### V1 — Grid Pathfinder
-
-- Represented the game as a 2D grid.
-- Implemented move validation.
-- Built BFS shortest-path search.
-- Added distance tracking, parent pointers, path reconstruction, and action conversion.
+- grid representation and move validation;
+- BFS shortest paths;
+- distance tracking and parent-based path reconstruction;
+- action conversion.
 
 ### V2 — C++ Fast Agent
+- migration from Python to C++17;
+- competition `moveDecision` interface;
+- Linux/x86-64 shared-library deployment through Docker.
 
-The Python prototype was migrated to C++17 to reduce decision latency and support the competition's Linux shared-object submission format.
+### V2.x — Strategic Planner
+- dynamic `k` allocation across two units;
+- resource value / travel-distance trade-off;
+- opponent and NPC race-risk estimation;
+- chained multi-target collection;
+- joint execution-order search;
+- exploration under fog-of-war;
+- selective vision purchasing.
 
-Key additions:
+### V8 — Champion Baseline
+V8 provided a stable baseline for log collection and controlled comparison. Analysis of winning and losing games revealed that some apparent problems, such as NPC/trample activity, were less discriminative than action efficiency, vision spending, and execution-order behavior.
 
-- visible-cell BFS;
-- dynamic target selection;
-- C++ shared-library deployment;
-- Docker-based Linux/x86-64 compilation.
+### V9 — Log-Driven Challenger
+V9 converted those observations into minimal testable changes and then beat V8 across all three public-test maps in the current simulation validation.
 
-### V2.1 — Dynamic Action Allocation
+## Experimental Method
 
-The two units share six actions per turn. Instead of using a fixed split, the agent evaluates different values of `k`, where:
+Development now follows a champion/challenger workflow:
 
 ```text
-unit 0 receives actions [0, k)
-unit 1 receives actions [k, 6)
+Collect logs
+    ↓
+Compare wins vs losses
+    ↓
+Identify repeated behavioral differences
+    ↓
+Form one testable hypothesis
+    ↓
+Make minimal changes
+    ↓
+Run V_new vs V_baseline
+    ↓
+Promote only after empirical improvement
 ```
 
-This allows movement capacity to be allocated to the unit with the stronger opportunity.
-
-### V2.2 — Competition-Aware Planning
-
-Target quality is no longer based only on raw gold value and distance. The agent also considers whether an opponent or NPC is likely to reach the target first.
-
-This turns the target-selection problem into an expected-value trade-off between:
-
-- resource value;
-- path distance;
-- opponent distance;
-- NPC pressure;
-- execution priority.
-
-### V2.3 — Joint Planner
-
-The current design evaluates action allocation and execution order together. Candidate plans compare multiple `k` values and both unit execution orders using the routes that would actually be executed.
-
-The planner also supports:
-
-- chained multi-target collection;
-- conservative handling of contested gold;
-- center-biased exploration when no strong visible target exists;
-- selective vision purchasing.
+This helps avoid overfitting individual matches or accumulating heuristics without evidence.
 
 ## Performance Engineering
 
 The production agent is implemented in C++17 and compiled into a Linux x86-64 `.so` file using Docker.
-
-Typical workflow:
 
 ```bash
 docker run --rm -it --platform linux/amd64 \
@@ -107,51 +112,26 @@ file player.so
 nm -D player.so | grep moveDecision
 ```
 
-Public-test decision latency has been around the low-microsecond range in recent iterations.
-
-## Experimental Framework
-
-The project now includes an automated tournament workflow for repeated public-test submissions against multiple opponents and maps.
-
-One recent benchmark used:
-
-- 3 maps;
-- 6 opponents;
-- 3 repetitions per opponent/map pair;
-- 54 total matches.
-
-This experimental setup is intended to measure not only overall win rate, but also map-dependent performance and opponent-specific weaknesses.
-
-## Current Research Questions
-
-1. Why does win rate vary across different map topologies?
-2. When should Manhattan distance be replaced by true BFS race distance for opponent prediction?
-3. How should the two units divide exploration versus exploitation roles?
-4. Can opponent behavior be profiled from match logs and used to adapt target scoring?
-5. Can map-specific parameters outperform one global parameter set without overfitting?
-
 ## Repository Structure
 
 ```text
 .
 ├── BFS.py                # Early Python BFS prototype
-├── player.cpp            # Current C++ competition agent
+├── player.cpp            # Competition agent / baseline path
+├── player_v9.cpp         # Current V9 log-driven challenger
 ├── Development_Log.md    # Iteration history and research notes
 ├── README.md
 └── .gitignore
 ```
 
-The repository intentionally keeps the early BFS prototype to show the progression from basic shortest-path search to competitive multi-agent decision making.
+## Next Questions
 
-## Future Work
-
-- map-adaptive strategy parameters;
-- automated log collection and analysis;
-- opponent strategy profiling;
-- stronger race-distance estimation;
-- local baseline opponents and agent tournaments;
-- systematic parameter search using match-level data.
+1. Does V9 retain its advantage over a larger number of matches and opponents?
+2. Does its improvement persist on hidden or structurally different maps?
+3. How much do `STAY` ratio, vision spending, and execution-order distribution change relative to V8?
+4. Can match-log metrics be extracted automatically after every tournament?
+5. Which single additional mechanism is best justified for V10?
 
 ## Motivation
 
-The project is designed as both an algorithmic engineering exercise and an applied decision-making research project. It combines graph algorithms, game strategy, low-latency C++, experimental evaluation, and iterative model design in a single system.
+The project is both an algorithmic engineering exercise and an applied decision-making experiment. It combines graph algorithms, low-latency C++, multi-agent planning, empirical evaluation, and iterative strategy design in one system.
