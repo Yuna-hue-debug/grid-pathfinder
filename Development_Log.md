@@ -4,7 +4,7 @@ This log documents the evolution of the project from a basic Python grid pathfin
 
 ---
 
-## 2026-08-06 — Grid Representation and Move Validation
+## 2026-08-06 - Grid Representation and Move Validation
 
 ### Goal
 Build the minimum environment representation needed before implementing search.
@@ -16,7 +16,7 @@ Build the minimum environment representation needed before implementing search.
 
 ---
 
-## 2026-08-07 to 2026-08-11 — From BFS to a Competitive Planner
+## 2026-08-07 to 2026-08-11 - From BFS to a Competitive Planner
 
 The project progressed through BFS shortest-path search, distance tracking, parent-based path reconstruction, action generation, C++17 migration, dynamic `k` allocation, value/distance trade-offs, competition-aware target scoring, multi-target routing, joint two-unit planning, exploration, and selective vision purchasing.
 
@@ -32,7 +32,7 @@ The C++ version is built as a Linux/x86-64 shared library and validated with `fi
 
 ---
 
-## 2026-08-11 to 2026-08-13 — Automated Tournament Testing
+## 2026-08-11 to 2026-08-13 - Automated Tournament Testing
 
 Repeated public-test submissions were automated across multiple maps and opponents. This shifted development from intuition-driven heuristic changes toward controlled empirical comparison.
 
@@ -40,76 +40,55 @@ The key lesson was that low latency alone is not enough: strategy must be evalua
 
 ---
 
-## 2026-08-15 — V8 Failure Analysis
-
-### Baseline
+## 2026-08-15 - V8 Failure Analysis
 
 V8 was treated as the champion rather than being overwritten by every new heuristic. Match logs from both wins and losses were compared to identify behavioral variables correlated with poor outcomes.
 
 ### Main observations
 
-The win/loss comparison suggested three recurring issues:
-
-1. **Inefficient action usage.** Losing games showed more `STAY` behavior, indicating that the six-action budget was not always converted into productive movement or collection.
-2. **Over-spending on vision.** Losing logs tended to spend materially more on vision than winning logs. This suggested a possible negative feedback loop: weak visible opportunities caused more information spending, which reduced retained gold without guaranteeing better collection.
-3. **Execution-order degeneracy.** Although V8 nominally searched both execution orders, the selected order was overwhelmingly `order = 0`. The objective often did not distinguish the two orders strongly enough, so execution-order search was close to a tie-breaking artifact rather than a meaningful strategic variable.
-
-An important negative result was also retained: NPC/trample activity alone did not explain the performance gap well enough to justify another large NPC-risk heuristic.
+1. **Inefficient action usage.** Losing games showed more `STAY` behavior.
+2. **Over-spending on vision.** Losing logs tended to spend more on vision than winning logs.
+3. **Execution-order degeneracy.** Although V8 searched both execution orders, the selected order was overwhelmingly `order = 0`.
+4. **NPC activity was not sufficiently discriminative.** Visible trample events did not justify another large NPC-risk heuristic.
 
 ### Research lesson
 
-Do not add complexity merely because a failure is visible in a log. First compare winning and losing samples and ask whether the feature actually separates them.
+Do not add complexity merely because a failure is visible in a log. Compare winning and losing samples first and ask whether the feature actually separates them.
 
 ---
 
-## 2026-08-15 — V9: Minimal Log-Driven Challenger
+## 2026-08-15 - V9: Minimal Log-Driven Challenger
 
-### Design principle
+V9 deliberately remained close to V8. It introduced three small changes corresponding to the observed failure modes.
 
-V9 deliberately remained close to V8. Instead of rewriting the planner, it introduced three small changes corresponding directly to the observed V8 failure modes.
+### Exploration separation
 
-### 1. Exploration separation
+The two units receive a light directional/lane preference when otherwise similar frontier cells are available. This is a tie-breaker rather than a hard map partition.
 
-V8's center-biased frontier exploration was preserved, but the two units receive a light directional/lane preference when otherwise similar frontier cells are available.
+### Execution-order urgency
 
-The purpose is not to hard-partition the map. It is a tie-breaking signal intended to reduce duplicated exploration and increase information gained per movement action.
+A small urgency bonus is added when the first-executing unit is in a genuine race for its first target. This makes `order` strategically relevant without dominating expected resource value.
 
-### 2. Execution-order urgency
+### More conservative vision purchasing
 
-V9 adds a small urgency bonus when the unit executing first is in a genuine race with an opponent or NPC for its first target.
+Vision remains available, but V9 requires weaker visible opportunity and substantial remaining fog before paying for additional information.
 
-This makes `order` strategically relevant without allowing execution priority to dominate expected resource value.
-
-### 3. More conservative vision purchasing
-
-Vision remains available, but V9 requires a weaker visible opportunity and a sufficiently incomplete board before purchasing additional information.
-
-This directly addresses the observation that losing V8 games tended to spend more on vision.
-
-### What V9 intentionally did NOT add
+### What V9 intentionally did not add
 
 - no large NPC cluster penalty;
-- no aggressive hard partition between the two units;
+- no hard partition between units;
 - no complete scoring rewrite;
-- no replacement of the existing V8 expected-value framework.
-
-This keeps the experiment interpretable: if V9 improves, the cause is more likely to be attributable to the three targeted changes rather than a large bundle of unrelated heuristics.
+- no replacement of V8's expected-value framework.
 
 ---
 
-## 2026-08-15 — Champion/Challenger Validation
+## 2026-08-15 - V9 Champion/Challenger Validation
 
-V8 was retained as the champion and V9 was tested as a challenger on all three public-test maps.
+V8 remained the champion while V9 was tested as a challenger.
 
-### Result
+**V9 defeated V8 on all three public-test maps in the direct simulation validation and was promoted.**
 
-**V9 defeated V8 on all three public-test maps in the simulation validation.**
-
-This is evidence that the log-driven changes improved the agent within the tested public-map environment. It is not treated as proof that V9 dominates every opponent or unseen map, so V8 remains useful as a historical benchmark.
-
-### Development lesson
-
-The most successful iteration in this stage followed this workflow:
+The important workflow became:
 
 ```text
 Winning + losing logs
@@ -127,7 +106,82 @@ Run direct challenger comparison
 Promote only after empirical improvement
 ```
 
-This is a stronger development process than repeatedly adding heuristics based on individual matches.
+---
+
+## 2026-08-17 - New Map and Cross-Map Robustness
+
+A newly introduced fifth map contained stronger corridor, wall, bottleneck, and connectivity effects. This exposed an important generalization question: a strategy that performs well on one topology may not transfer cleanly to another.
+
+Rather than hard-coding a `map_id` strategy, the analysis reframed maps through structural properties such as:
+
+- obstacle density;
+- connectivity;
+- corridor width;
+- central accessibility;
+- fog exposure;
+- competition density.
+
+This is important for hidden-map robustness because map-specific constants can overfit public tests.
+
+---
+
+## 2026-08-17 - V10 Topology Experiment
+
+### Hypothesis
+
+V9's frontier exploration might undervalue narrow entrances leading to large unseen regions. A topology-aware planner might improve performance on corridor/maze maps.
+
+### Changes tested
+
+V10 introduced three ideas:
+
+1. larger-radius fog/frontier potential;
+2. accessibility toward the central resource region rather than relying only on geometric center distance;
+3. a stronger penalty for unused action budget.
+
+### Result
+
+**V9 won the direct V9-vs-V10 tests. V10 was rejected.**
+
+### Why the negative result matters
+
+The V10 experiment revealed two important mistakes in the initial hypothesis implementation:
+
+- topology/exploration value can become too influential relative to immediate expected gold;
+- `STAY` is a useful diagnostic signal, but penalizing idle actions directly can reward movement that is active but not productive.
+
+In other words:
+
+```text
+moving more != earning more
+more sophisticated heuristic != stronger agent
+```
+
+This was an important correction from correlation toward causal thinking.
+
+---
+
+## 2026-08-17 - Competition Freeze
+
+Further heuristic optimization was stopped before the preliminary competition.
+
+**V9 is frozen as the final competition version.**
+
+The decision is evidence-based rather than version-number-based:
+
+```text
+V8 baseline
+    ↓
+V9 beats V8 -> PROMOTE
+    ↓
+V10 attempts topology improvement
+    ↓
+V9 beats V10 -> REJECT V10
+    ↓
+V9 FINAL
+```
+
+The project therefore preserves negative results rather than assuming the newest version must be the best version.
 
 ---
 
@@ -156,41 +210,95 @@ GameOutput
 ## Current Status
 
 - [x] BFS shortest-path search and path reconstruction
-- [x] Python-to-C++ migration
+- [x] Python BFS prototype
+- [x] Python-to-C++17 migration
+- [x] Linux/x86-64 `.so` deployment through Docker
 - [x] Dynamic `k` allocation
 - [x] Competition-aware target scoring
 - [x] Joint two-unit planning
 - [x] Multi-target collection
 - [x] Exploration under fog-of-war
+- [x] Selective vision purchasing
 - [x] Automated repeated match submission
 - [x] Win/loss log analysis
 - [x] Champion/challenger versioning
-- [x] V9 validated against V8 on all three public maps
-- [ ] Larger V9 sample against diverse opponents
-- [ ] Automated match-log download and metric extraction
-- [ ] Opponent behavior profiling
-- [ ] Hidden-map robustness testing
-- [ ] Systematic parameter optimization
+- [x] V9 promoted after beating V8
+- [x] Cross-map/topology analysis after the fifth map appeared
+- [x] V10 tested and rejected after losing to V9
+- [x] V9 frozen as final competition version
 
 ---
 
-## Next Research Iteration
+## Learning Trajectory
 
-The next iteration should resist unnecessary architectural expansion. The priority is to test whether V9's improvement survives larger samples and different opponents.
+The technical learning path can be summarized as:
 
-Useful measurements include:
+```text
+Grid representation
+      ↓
+BFS queue + visited
+      ↓
+Distance + parent
+      ↓
+Path reconstruction
+      ↓
+Action generation
+      ↓
+Python prototype
+      ↓
+C++17 implementation
+      ↓
+Docker + Linux shared library
+      ↓
+Target scoring
+      ↓
+Two-unit joint planning
+      ↓
+k + order optimization
+      ↓
+Fog / vision / opponent reasoning
+      ↓
+Automated matches
+      ↓
+Log analysis
+      ↓
+Champion/challenger experiments
+      ↓
+Cross-map robustness
+      ↓
+Rejecting unsupported complexity
+```
 
-- win rate by map and opponent;
-- `STAY` ratio;
-- vision spending;
-- `order = 1` selection frequency;
-- gold trajectory over the match;
-- collection efficiency per movement action.
+The largest shift was methodological. Early development focused on making an algorithm work. Later development focused on determining whether a proposed improvement actually works.
 
-Only after these metrics are stable should V10 introduce another strategic mechanism.
+---
+
+## AI-Assisted Research Loop
+
+AI was used outside the latency-critical runtime loop to accelerate learning and experimentation:
+
+```text
+Game / match logs
+       ↓
+AI-assisted diagnosis
+       ↓
+Human-reviewed hypothesis
+       ↓
+Code modification
+       ↓
+Compilation / deployment
+       ↓
+Battle test
+       ↓
+Evidence
+       ↓
+Keep or reject
+```
+
+AI helped explain algorithms, inspect logs, generate hypotheses, review code, design comparisons, and document findings. The runtime competition agent remains deterministic C++.
 
 ---
 
 ## Reflection
 
-The project has moved beyond learning BFS. The important lesson from V8 → V9 is methodological: competitive-agent development benefits from treating strategy changes as experiments. Logs provide evidence, the baseline provides a control, and a challenger should change as little as necessary to test a hypothesis.
+The project began as a BFS learning exercise and became a small quantitative research workflow. The final lesson was not simply how to write a faster agent. It was how to separate routing from strategy, build reproducible artifacts, use logs rather than anecdotes, preserve a baseline, test challengers, learn from negative results, and stop optimizing when additional complexity is no longer supported by evidence.
